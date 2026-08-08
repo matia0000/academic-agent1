@@ -3,24 +3,30 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from supabase import create_client, Client
+from datetime import datetime
 import rag
 from step5_agent_plus import run_agent
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    rag.load_index()          # 서버 기동 시 인덱스 1회 로딩 (요청마다 재로딩 방지)
+    rag.load_index()
     yield
 
 app = FastAPI(title="학사도우미 API", version="1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],              # 교육용. 운영 시 Lovable 도메인만 허용
+    allow_origins=["*"],
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
-SESSIONS = {}                         # 교육용 임시 메모리 (재시작 시 초기화)
+SESSIONS = {}
+
+# ──────────────────────────────────────────
+# /ask 엔드포인트
+# ──────────────────────────────────────────
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=2, max_length=500)
@@ -50,3 +56,52 @@ def ask(req: AskRequest):
         raise HTTPException(status_code=500, detail=f"Agent 실행 실패: {e}")
     SESSIONS[sid] = new_history[-12:]
     return AskResponse(**data, session_id=sid)
+
+# ──────────────────────────────────────────
+# Supabase 상담 신청 엔드포인트
+# ──────────────────────────────────────────
+
+def get_supabase() -> Client:
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not url or not key:
+        raise HTTPException(status_code=500, detail="Supabase 환경변수 미설정")
+    return create_client(url, key)
+
+class CounselingRequest(BaseModel):
+    학생이름: str
+    학번: str
+    연락처: str
+    이메일: str
+    상담분야: str
+    희망일자: str
+    희망시간대: str
+    상담내용: str
+
+@app.post("/counseling")
+def create_counseling(req: CounselingRequest):
+    try:
+        sb = get_supabase()
+        data = req.model_dump()
+        data["신청일시"] = datetime.utcnow().isoformat()
+        result = sb.table("counseling").insert(data).execute()
+        saved_id = result.data[0]["id"] if result.data else None
+        return {"status": "ok", "id": saved_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/counseling")
+def get_counseling(student_id: str | None = None):
+    try:
+        sb = get_supabase()
+        query = sb.table("counseling").select("*").order("신청일시", desc=True)
+        if student_id:
+            query = query.eq("학번", student_id)
+        result = query.execute()
+        return {"status": "ok", "data": result.data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
