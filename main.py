@@ -69,21 +69,26 @@ def get_supabase() -> Client:
     return create_client(url, key)
 
 class CounselingRequest(BaseModel):
-    학생이름: str
-    학번: str
-    연락처: str
-    이메일: str
-    상담분야: str
-    희망일자: str
-    희망시간대: str
-    상담내용: str
+    name: str
+    student_id: str
+    phone: str | None = None
+    email: str | None = None
+    type: str
+    date: str
+    time_slot: str | None = None
+    message: str
 
 @app.post("/counseling")
 def create_counseling(req: CounselingRequest):
     try:
         sb = get_supabase()
-        data = req.model_dump()
-        data["신청일시"] = datetime.utcnow().isoformat()
+        data = {
+            "name": req.name,
+            "student_id": req.student_id,
+            "type": req.type,
+            "date": req.date,
+            "message": req.message,
+        }
         result = sb.table("counseling").insert(data).execute()
         saved_id = result.data[0]["id"] if result.data else None
         return {"status": "ok", "id": saved_id}
@@ -96,9 +101,9 @@ def create_counseling(req: CounselingRequest):
 def get_counseling(student_id: str | None = None):
     try:
         sb = get_supabase()
-        query = sb.table("counseling").select("*").order("신청일시", desc=True)
+        query = sb.table("counseling").select("*").order("created_at", desc=True)
         if student_id:
-            query = query.eq("학번", student_id)
+            query = query.eq("student_id", student_id)
         result = query.execute()
         return {"status": "ok", "data": result.data}
     except HTTPException:
